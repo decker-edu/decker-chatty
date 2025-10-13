@@ -1,0 +1,19 @@
+{
+  "name": "decker-chatty",
+  "author": "Mario Botsch",
+  "license": "MIT",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "description": "Proxy Server for Decker to send messages to ChatGPT aka. \"chatty\"",
+  "main": "server.mjs",
+  "keywords": [
+    "chatbot"
+  ],
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^5.1.0"
+  }
+}
