@@ -1,0 +1,9 @@
+node_modules
+package-lock.json
+
+# Configuration with sensitive data
+config.json
+
+# Logs
+log/
+*.log
