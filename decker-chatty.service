@@ -6,15 +6,11 @@ After=network.target
 Type=simple
 User=tramberend-admin
 WorkingDirectory=/home/tramberend-admin/server/decker-chatty
-ExecStart=/usr/bin/node server.mjs
+ExecStart=/home/linuxbrew/.linuxbrew/bin/node server.mjs
 Restart=on-failure
 RestartSec=10
 StandardOutput=append:/home/tramberend-admin/server/decker-chatty/chatty.log
 StandardError=append:/home/tramberend-admin/server/decker-chatty/chatty.log
-
-# Security settings
-NoNewPrivileges=true
-PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target

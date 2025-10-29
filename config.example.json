@@ -1,0 +1,5 @@
+{
+  "apiKey": "your-openai-api-key-here",
+  "port": 4242,
+  "enableLogging": false
+}
