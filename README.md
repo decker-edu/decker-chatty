@@ -13,11 +13,13 @@ Client-supplied `model`/`instructions`/`tools` are ignored.
 
 # Setup
 
-Edit `config.json`:
+Copy `config-example.json` to `config.json` and edit it (the real `config.json`
+holds secrets and is git-ignored):
 
 ``` json
 {
   "port": 3000,
+  "apiKey": "sk-... legacy fallback key, optional",
   "prompts": {
     "pmpt_example": {
       "apiKey": "sk-...",
@@ -29,12 +31,14 @@ Edit `config.json`:
 
 - `prompts` is keyed by **prompt id** (the deck's `chatty.prompt`, now just a
   selector — no longer an OpenAI stored-prompt id).
-- `apiKey` — the OpenAI API key for that prompt. Rotating it is free (no deck
-  recompile needed).
+- `apiKey` (inside a prompt) — the OpenAI API key for that prompt. Rotating it is
+  free (no deck recompile needed).
 - `deckConfigKey` — the 32-byte AES-256-GCM key shared with decker. Generate
   with `openssl rand -base64 32`. It **must equal** the key in the deck author's
   git-controlled `chatty-key.json`. Rotating it requires recompiling every deck
   that uses this prompt id.
+- top-level `apiKey` (optional) — fallback key used only for the legacy
+  stored-prompt path (old decks with no sealed blob); see *Back-compat*.
 
 ``` bash
 npm install
@@ -53,10 +57,14 @@ Haskell sealing code are checked against it (`npm test` / `stack test`).
 
 ## Back-compat
 
-A request without a `sealed` blob but with a legacy `prompt.id` is forwarded
-as-is (the old stored-prompt path), using that prompt's `apiKey`. This keeps
-already-published decks working until OpenAI removes stored prompts; remove it
-once all decks have been recompiled with sealed config.
+A request without a `sealed` blob but with a legacy `prompt.id` is forwarded to
+OpenAI as-is (the old stored-prompt path), using the **top-level** `apiKey`. The
+`prompt.id` is an OpenAI stored-prompt id resolved by OpenAI, not one of our
+selectors, so it is **not** looked up in `prompts` — old decks keep working
+unchanged as long as a top-level `apiKey` is configured (use the key the stored
+prompts were created with). If no top-level `apiKey` is set, legacy requests get
+a `400`. Remove the top-level key once all decks have been recompiled with sealed
+config (and OpenAI removes stored prompts).
 
 # Running as a systemd service
 

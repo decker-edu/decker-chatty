@@ -70,13 +70,18 @@ app.post("/chatty", async (req, res) => {
     }
 
     // Legacy path (old decks, no sealed blob): forward the stored-prompt request
-    // as-is. Works until OpenAI removes stored prompts. The api key is taken
-    // from the matching prompt entry.
+    // to OpenAI as-is, using the top-level fallback apiKey. The prompt.id is an
+    // OpenAI stored-prompt id resolved by OpenAI, not one of our selectors, so
+    // it is deliberately not looked up in `prompts`. This keeps already-
+    // published decks working until OpenAI removes stored prompts.
     if (prompt?.id) {
-      const entry = prompts[prompt.id];
-      if (!entry) return res.status(400).send(`unknown prompt id: ${prompt.id}`);
+      if (!config.apiKey) {
+        return res
+          .status(400)
+          .send("legacy stored-prompt request but no top-level apiKey configured");
+      }
       const body = { stream: true, ...req.body };
-      return await streamUpstream(res, entry.apiKey, body);
+      return await streamUpstream(res, config.apiKey, body);
     }
 
     return res.status(400).send("missing sealed config or prompt id");
