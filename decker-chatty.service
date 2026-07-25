@@ -9,8 +9,7 @@ WorkingDirectory=/home/tramberend-admin/server/decker-chatty
 ExecStart=/usr/bin/node server.mjs
 Restart=on-failure
 RestartSec=10
-StandardOutput=append:/home/tramberend-admin/server/decker-chatty/chatty.log
-StandardError=append:/home/tramberend-admin/server/decker-chatty/chatty.log
+# Logs go to the journal (journalctl -u decker-chatty); no file redirect.
 
 # Security settings
 NoNewPrivileges=true
