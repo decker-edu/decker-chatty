@@ -99,11 +99,12 @@ export function loginPage({ mountPath, promptId = "", error = "" }) {
   return layout({ mountPath, title: "Sign in — Prof. Bot logs", body, loadHtmx: false, loadMath: false });
 }
 
-function topbar(promptId) {
+function topbar(promptId, isSuperAdmin) {
   return `
 <header class="topbar">
   <a class="logo sm" href="./">Prof.&nbsp;Bot <span>logs</span></a>
   <div class="spacer"></div>
+  ${isSuperAdmin ? '<span class="pill accent">super admin</span>' : ""}
   <span class="pill">${escapeHtml(promptId)}</span>
   <form method="post" action="logout" class="inline"><button class="ghost" type="submit">Sign out</button></form>
 </header>`;
@@ -115,39 +116,72 @@ function statusTag(s) {
   return `<span class="tag ${cls}">${escapeHtml(s ?? "?")}</span>`;
 }
 
-export function listPage({ mountPath, promptId, sessions, page, hasNext }) {
+export function listPage({
+  mountPath,
+  promptId,
+  isSuperAdmin = false,
+  promptIds = [],
+  promptFilter = "",
+  sessions,
+  page,
+  hasNext,
+}) {
   const rows = sessions.length
     ? sessions
-        .map(
-          (s) => `
-    <a class="row" href="session/${encodeURIComponent(s.session_id)}"
-       hx-get="session/${encodeURIComponent(s.session_id)}"
+        .map((s) => {
+          const href = `session/${encodeURIComponent(s.prompt_id)}/${encodeURIComponent(s.session_id)}`;
+          return `
+    <a class="row" href="${href}"
+       hx-get="${href}"
        hx-target="#detail" hx-push-url="true">
       <div class="preview">${escapeHtml(truncate(s.preview)) || '<span class="muted">(no text)</span>'}</div>
       <div class="meta">
+        ${isSuperAdmin ? `<span class="tag">${escapeHtml(s.prompt_id)}</span><span class="sep">·</span>` : ""}
         <span>${escapeHtml(s.turn_count)} turn${s.turn_count === 1 ? "" : "s"}</span>
         <span class="sep">·</span>
         <span class="model">${escapeHtml(s.model ?? "?")}</span>
         ${s.error_count ? `<span class="sep">·</span><span class="tag bad">${escapeHtml(s.error_count)} err</span>` : ""}
         <time datetime="${escapeHtml(s.last_at)}">${escapeHtml(fmtDate(s.last_at))}</time>
       </div>
-    </a>`
-        )
+    </a>`;
+        })
         .join("")
     : '<p class="muted pad">No sessions logged yet.</p>';
 
+  const filterQS = promptFilter ? `&prompt=${encodeURIComponent(promptFilter)}` : "";
   const pager = `
   <nav class="pager">
-    ${page > 0 ? `<a class="btn" href="?page=${page - 1}">‹ Newer</a>` : `<span class="btn disabled">‹ Newer</span>`}
+    ${page > 0 ? `<a class="btn" href="?page=${page - 1}${filterQS}">‹ Newer</a>` : `<span class="btn disabled">‹ Newer</span>`}
     <span class="muted">Page ${page + 1}</span>
-    ${hasNext ? `<a class="btn" href="?page=${page + 1}">Older ›</a>` : `<span class="btn disabled">Older ›</span>`}
+    ${hasNext ? `<a class="btn" href="?page=${page + 1}${filterQS}">Older ›</a>` : `<span class="btn disabled">Older ›</span>`}
   </nav>`;
 
+  const filterForm = isSuperAdmin
+    ? `
+  <form method="get" class="inline filter" onchange="this.submit()">
+    <label>Prompt
+      <select name="prompt">
+        <option value=""${promptFilter ? "" : " selected"}>All prompts</option>
+        ${promptIds
+          .map(
+            (id) =>
+              `<option value="${escapeHtml(id)}"${id === promptFilter ? " selected" : ""}>${escapeHtml(id)}</option>`
+          )
+          .join("")}
+      </select>
+    </label>
+    <noscript><button type="submit">Filter</button></noscript>
+  </form>`
+    : "";
+
+  const heading = isSuperAdmin ? `Sessions — ${promptFilter || "all prompts"}` : `Sessions — ${promptId}`;
+
   const body = `
-${topbar(promptId)}
+${topbar(promptId, isSuperAdmin)}
 <main class="wrap split">
   <section class="list">
     <h2>Sessions</h2>
+    ${filterForm}
     <div class="rows">${rows}</div>
     ${pager}
   </section>
@@ -155,12 +189,20 @@ ${topbar(promptId)}
     <div class="empty muted">Select a session to view its transcript.</div>
   </section>
 </main>`;
-  return layout({ mountPath, title: `Sessions — ${promptId}`, body });
+  return layout({ mountPath, title: heading, body });
 }
 
 // The transcript for one session. Rendered as a full page on direct navigation
 // and as a bare fragment when requested by htmx (partial swap into #detail).
-export function sessionDetail({ mountPath, promptId, sessionId, turns, fragment }) {
+export function sessionDetail({
+  mountPath,
+  promptId,
+  isSuperAdmin = false,
+  sessionPromptId = promptId,
+  sessionId,
+  turns,
+  fragment,
+}) {
   const turnsHtml = turns
     .map((t, i) => {
       const usage = t.usage_json ? safeUsage(t.usage_json) : "";
@@ -184,19 +226,21 @@ export function sessionDetail({ mountPath, promptId, sessionId, turns, fragment 
   const inner = `
   <div class="detail-head">
     <h2>Transcript</h2>
+    ${isSuperAdmin ? `<span class="tag">${escapeHtml(sessionPromptId)}</span>` : ""}
     <code class="sid">${escapeHtml(sessionId)}</code>
   </div>
   <div class="turns">${turnsHtml || '<p class="muted">This session has no turns.</p>'}</div>`;
 
   if (fragment) return inner;
 
+  const backHref = isSuperAdmin ? `./?prompt=${encodeURIComponent(sessionPromptId)}` : "./";
   const body = `
-${topbar(promptId)}
+${topbar(promptId, isSuperAdmin)}
 <main class="wrap">
-  <p><a class="btn" href="./">‹ All sessions</a></p>
+  <p><a class="btn" href="${backHref}">‹ All sessions</a></p>
   <section class="detail solo">${inner}</section>
 </main>`;
-  return layout({ mountPath, title: `Session ${sessionId} — ${promptId}`, body });
+  return layout({ mountPath, title: `Session ${sessionId} — ${sessionPromptId}`, body });
 }
 
 function safeUsage(json) {

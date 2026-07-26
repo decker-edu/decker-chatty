@@ -8,7 +8,8 @@
   "prompts": {
     "pmpt_example": {
       "apiKey": "sk-... OpenAI API key for this prompt",
-      "deckConfigKey": "base64 32-byte deck-config key (openssl rand -base64 32)"
+      "deckConfigKey": "base64 32-byte deck-config key (openssl rand -base64 32)",
+      "superAdmin": false
     }
   }
 }

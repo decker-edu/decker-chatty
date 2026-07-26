@@ -92,10 +92,13 @@ function makeApi(db) {
 
   // Sessions for one prompt, newest activity first, with a first-message
   // preview and turn count for the list view. Scoped to prompt_id — an admin
-  // only ever sees their own prompt's traffic.
+  // only ever sees their own prompt's traffic. `promptId` may be null/undefined
+  // to list sessions across every prompt (super-admin mode); `prompt_id` is
+  // always returned so the caller can scope any follow-up lookup correctly.
   const stmtListSessions = db.prepare(`
     SELECT
       session_id,
+      prompt_id,
       COUNT(*)                       AS turn_count,
       MIN(created_at)                AS started_at,
       MAX(created_at)                AS last_at,
@@ -107,6 +110,20 @@ function makeApi(db) {
     ORDER BY last_at DESC
     LIMIT ? OFFSET ?
   `);
+  const stmtListSessionsAll = db.prepare(`
+    SELECT
+      session_id,
+      prompt_id,
+      COUNT(*)                       AS turn_count,
+      MIN(created_at)                AS started_at,
+      MAX(created_at)                AS last_at,
+      MAX(model)                     AS model,
+      SUM(CASE WHEN status NOT IN ('completed') THEN 1 ELSE 0 END) AS error_count
+    FROM turns
+    GROUP BY prompt_id, session_id
+    ORDER BY last_at DESC
+    LIMIT ? OFFSET ?
+  `);
   const stmtFirstInput = db.prepare(`
     SELECT input_text FROM turns
     WHERE prompt_id = ? AND session_id = ?
@@ -114,9 +131,12 @@ function makeApi(db) {
     LIMIT 1
   `);
   function listSessions(promptId, { limit = 50, offset = 0 } = {}) {
-    const rows = stmtListSessions.all(promptId, limit, offset);
+    const rows =
+      promptId == null
+        ? stmtListSessionsAll.all(limit, offset)
+        : stmtListSessions.all(promptId, limit, offset);
     for (const r of rows) {
-      const first = stmtFirstInput.get(promptId, r.session_id);
+      const first = stmtFirstInput.get(r.prompt_id, r.session_id);
       r.preview = first?.input_text ?? "";
     }
     return rows;
@@ -125,8 +145,13 @@ function makeApi(db) {
   const stmtCountSessions = db.prepare(
     "SELECT COUNT(DISTINCT session_id) AS n FROM turns WHERE prompt_id = ?"
   );
+  const stmtCountSessionsAll = db.prepare(
+    "SELECT COUNT(DISTINCT prompt_id || ' ' || session_id) AS n FROM turns"
+  );
   function countSessions(promptId) {
-    return stmtCountSessions.get(promptId).n;
+    return promptId == null
+      ? stmtCountSessionsAll.get().n
+      : stmtCountSessions.get(promptId).n;
   }
 
   // All turns of one session, oldest first, for the transcript view. Scoped to

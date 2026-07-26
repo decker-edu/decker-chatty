@@ -26,9 +26,15 @@ export function loadPrompts(config) {
     if (typeof entry.deckConfigKey !== "string") {
       throw new Error(`config: prompt "${id}" is missing deckConfigKey`);
     }
+    if (entry.superAdmin !== undefined && typeof entry.superAdmin !== "boolean") {
+      throw new Error(`config: prompt "${id}" superAdmin must be a boolean`);
+    }
     out[id] = {
       apiKey: entry.apiKey,
       deckConfigKey: decodeKey(entry.deckConfigKey, `prompt "${id}" deckConfigKey`),
+      // Optional: this prompt's admin credentials (promptId + deckConfigKey)
+      // also unlock every other prompt's session logs, not just this one's.
+      superAdmin: Boolean(entry.superAdmin),
     };
   }
   return out;
