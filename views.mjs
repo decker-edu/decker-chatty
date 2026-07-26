@@ -123,16 +123,14 @@ export function listPage({ mountPath, promptId, sessions, page, hasNext }) {
     <a class="row" href="session/${encodeURIComponent(s.session_id)}"
        hx-get="session/${encodeURIComponent(s.session_id)}"
        hx-target="#detail" hx-push-url="true">
-      <div class="row-main">
-        <div class="preview">${escapeHtml(truncate(s.preview)) || '<span class="muted">(no text)</span>'}</div>
-        <div class="meta">
-          <span>${escapeHtml(s.turn_count)} turn${s.turn_count === 1 ? "" : "s"}</span>
-          <span>·</span>
-          <span>${escapeHtml(s.model ?? "?")}</span>
-          ${s.error_count ? `<span>·</span><span class="tag bad">${escapeHtml(s.error_count)} err</span>` : ""}
-        </div>
+      <div class="preview">${escapeHtml(truncate(s.preview)) || '<span class="muted">(no text)</span>'}</div>
+      <div class="meta">
+        <span>${escapeHtml(s.turn_count)} turn${s.turn_count === 1 ? "" : "s"}</span>
+        <span class="sep">·</span>
+        <span class="model">${escapeHtml(s.model ?? "?")}</span>
+        ${s.error_count ? `<span class="sep">·</span><span class="tag bad">${escapeHtml(s.error_count)} err</span>` : ""}
+        <time datetime="${escapeHtml(s.last_at)}">${escapeHtml(fmtDate(s.last_at))}</time>
       </div>
-      <time datetime="${escapeHtml(s.last_at)}">${escapeHtml(fmtDate(s.last_at))}</time>
     </a>`
         )
         .join("")
