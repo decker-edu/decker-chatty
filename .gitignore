@@ -3,3 +3,6 @@ config.json
 chatty.log
 log
 package-lock.json
+chatty.db
+chatty.db-wal
+chatty.db-shm

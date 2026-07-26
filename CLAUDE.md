@@ -32,13 +32,28 @@ See decker's `doc/chatty-sealed-config.md` for the full design.
 ## Files
 
 - `server.mjs` — Express app, the `/chatty` and `/health` routes, SSE streaming.
+  Also opens the session-log DB, records each sealed turn, and mounts the admin
+  router.
 - `seal.mjs` — pure crypto/config helpers (no Express): `decodeKey`,
   `loadPrompts`, `openConfig`, `buildUpstreamBody`. **Unit-tested; keep logic
   here, not in the route handler.**
-- `test/seal.test.mjs` — `node --test` suite. Run with `npm test`.
+- `logging.mjs` — pure `extractLogFields` (no Express/DB): turns a request +
+  terminal SSE event into a log row. **Unit-tested.**
+- `db.mjs` — session-log store over built-in `node:sqlite` (no native dep):
+  schema, `insertTurn` (session-id chaining), scoped read/delete helpers.
+  **Unit-tested.**
+- `admin.mjs` — `express.Router()` for the admin UI: cookie auth, session list,
+  transcript. Self-contained (no session-store / cookie-parser dep).
+- `views.mjs` — server-rendered HTML templates (plain strings, HTML-escaped).
+- `markdown.mjs` — `renderMarkdown`: safe markdown → HTML with math preserved
+  for MathJax (`markdown-it`, `html:false`). **Unit-tested.**
+- `public/` — `styles.css` (neobrutalist), vendored `htmx.min.js`, and vendored
+  `vendor/mathjax/tex-svg.js` (MathJax v3, self-contained SVG output).
+- `test/*.test.mjs` — `node --test` suites (seal, logging, db). Run `npm test`.
 - `config.json` — **git-ignored**, holds real secrets. Copy from
   `config-example.json`.
 - `config-example.json` — committed placeholder config.
+- `chatty.db` — **git-ignored** SQLite session log (created at runtime).
 - `decker-chatty.service` — systemd unit (runs `node server.mjs`, logs to
   `chatty.log`).
 
@@ -76,6 +91,77 @@ present:
 `instructions` are sent; on later turns OpenAI carries them via
 `previous_response_id`, so only `model`/`params`/`tools` are re-sent.
 
+## Session logging & admin UI
+
+Every **sealed** turn is recorded to a SQLite session log; the **legacy** path is
+deliberately **not** logged (its `prompt.id` is OpenAI's, not one of our
+selectors, and no admin can authenticate to read it).
+
+**What a "session" is.** The proxy is otherwise stateless — conversation
+threading lives on OpenAI's side via `previous_response_id`. `db.insertTurn`
+reconstructs a thread at write time: a turn with no `previous_response_id`
+starts a new `session_id`; a follow-up inherits the `session_id` of the turn
+whose `response_id` it replies to (found via the captured `response.completed`
+id). Sessions are **anonymous** — the proxy sees no student identity.
+
+**What is stored / not stored.** Input text, output text, model, usage, status
+and errors are stored in full (that's the point). **Never stored:** api keys and
+the decrypted `instructions` — the admin who reads the log already authored the
+instructions, and `extractLogFields` has no field that could carry them (there's
+a unit test asserting this). This is a **deliberate reversal** of the
+"never log conversation content" rule that still applies to the **stdout/journald**
+logs — that rule is about the console, not this purpose-built store.
+
+**Capture path.** `streamUpstream` keeps the last terminal SSE event and calls
+`recordTurn` at every exit (completed / failed / incomplete / upstream-error /
+network-error / silent-end). Logging is wrapped so a DB failure can **never**
+break the proxy response.
+
+**Admin auth.** `admin.mjs` mounts at `config.adminMountPath` (default `/admin`)
+and is **only enabled when `config.cookieSecret` is set** (that secret signs the
+login cookie). Credentials are **prompt id + that prompt's `deckConfigKey`**,
+compared in constant time (`crypto.timingSafeEqual`); unknown prompt ids take the
+same path as a wrong key (no existence oracle) and there's an in-memory login
+throttle. On success a short (12h) HMAC-signed `HttpOnly; SameSite=Lax` cookie is
+set, scoped to the mount path. Every data route is **scoped to the promptId in
+the verified cookie** — an admin only ever sees their own prompt's traffic. UI is
+server-rendered HTML + htmx (progressive: full-page nav works without JS);
+transcript view returns a bare fragment when `HX-Request: true`.
+
+**Transcript rendering.** Student input and bot output are rendered as markdown
+with embedded math (decker decks use both). `markdown.mjs` runs `markdown-it`
+with `html:false` so any raw HTML in the untrusted content is **escaped, not
+emitted** — that's the XSS boundary, no client-side sanitizer involved. Math is
+pulled out to inert placeholders **before** markdown runs and restored
+(HTML-escaped, delimiters intact) **after**, so markdown never mangles TeX
+(`_`, `*`, `\`, backticks). The vendored MathJax (SVG output, no runtime font
+fetches) typesets `$…$`/`\(…\)` inline and `$$…$$`/`\[…\]` display client-side;
+an `htmx:afterSwap` handler re-typesets a transcript swapped into `#detail`.
+Everything else in the UI (previews, ids, errors) stays plain `escapeHtml`.
+
+**Retention.** Currently infinite by decision. `db.deleteSession` /
+`db.deleteBefore` exist (prompt-scoped) but the purge UI is **deferred** — wiring
+a route to them is the only work needed to expose it.
+
+**Behind Caddy (path prefix).** Set `adminMountPath` to the public prefix and use
+a **non-stripping** `handle` so internal and external paths match (pages use
+`<base href="{mountPath}/">` + relative links; redirects use absolute
+`{mountPath}/…`). Example:
+
+```caddy
+example.org {
+  handle /admin/* {
+    reverse_proxy 127.0.0.1:3000   # path preserved; app mounts at /admin
+  }
+  handle /chatty {
+    reverse_proxy 127.0.0.1:3000
+  }
+}
+```
+
+Keep `cookieSecure: true` in production (HTTPS via Caddy); set it to `false` only
+for local plain-HTTP testing.
+
 ## Crypto contract (do not break)
 
 AES-256-GCM. Wire format: `base64( nonce(12) || ciphertext || tag(16) )`, with
@@ -95,6 +181,10 @@ must reproduce that exact blob** — if you touch the crypto, run `npm test` her
 {
   "port": 3000,
   "apiKey": "sk-... optional, legacy fallback for old unsealed decks",
+  "dbPath": "./chatty.db (optional; session-log SQLite file)",
+  "adminMountPath": "/admin (optional; mount path == public Caddy prefix)",
+  "cookieSecret": "optional; when set, enables the admin UI and signs its cookie",
+  "cookieSecure": true,
   "prompts": {
     "<prompt-id>": {
       "apiKey": "sk-... OpenAI key for this prompt",
@@ -103,6 +193,14 @@ must reproduce that exact blob** — if you touch the crypto, run `npm test` her
   }
 }
 ```
+
+- `dbPath` — session log location; defaults to `./chatty.db`. Git-ignored.
+- `adminMountPath` — admin UI mount path; defaults to `/admin`. Set it equal to
+  the public Caddy prefix (non-stripping `handle`).
+- `cookieSecret` — signs the admin login cookie; **admin UI is disabled without
+  it**. Use a long random string.
+- `cookieSecure` — `Secure` flag on the login cookie; keep `true` in production,
+  `false` only for local plain-HTTP testing.
 
 - `prompts` is keyed by **prompt id** (the deck's `chatty.prompt`) — now just a
   selector, no longer an OpenAI stored-prompt id.
@@ -116,13 +214,27 @@ must reproduce that exact blob** — if you touch the crypto, run `npm test` her
 
 ## Conventions / gotchas
 
-- ESM (`.mjs`, `"type"` via explicit extensions). Node ≥ 18 for built-in
-  `fetch`, `crypto.createDecipheriv("aes-256-gcm")`, and `node --test`.
-- Never log or echo secrets (api keys, deck-config keys, decrypted instructions).
+- ESM (`.mjs`, `"type"` via explicit extensions). **Node ≥ 22.5** now, for the
+  built-in `node:sqlite` (`db.mjs`) and `import.meta.dirname` (`admin.mjs`), on
+  top of `fetch`, `crypto`, and `node --test`. No native modules, no build step.
+- Never log or echo secrets (api keys, deck-config keys, decrypted instructions)
+  **to the console**. The SQLite session store deliberately keeps conversation
+  content but still never stores keys or instructions — see the section above.
 - `config.json` is git-ignored — never commit real keys; edit
   `config-example.json` for documentation changes.
-- Keep crypto and body-assembly in `seal.mjs` so they stay unit-testable; the
-  route handler should only do lookups, error responses and streaming.
+- Keep crypto and body-assembly in `seal.mjs`, log-row extraction in
+  `logging.mjs`, and store logic in `db.mjs` — all pure and unit-tested. The
+  route handler and `admin.mjs` should only do lookups, error responses,
+  streaming and rendering.
+- Functional client assets are **vendored** in `public/` (pin the version):
+  `htmx.min.js` and `vendor/mathjax/tex-svg.js` — the admin path stays usable
+  without outbound internet. The **one** deliberate CDN dependency is Google
+  Fonts (Big Shoulders / Archivo / IBM Plex Mono, matching siloserver.org's
+  look); it's aesthetic-only and degrades to system stacks in `styles.css`.
+- Styling matches **siloserver.org**'s refined "blueprint/console"
+  neobrutalism: thin 1.5px ink borders, hard offset shadows (no blur), sharp
+  corners, warm cream paper, saturated blue/red/orange/green accents. Tokens in
+  `styles.css` mirror its variable names; light + dark via `prefers-color-scheme`.
 - The matching client/author code lives in the **decker** repo:
   `resource/decker/support/chatty/chatty.js` (sends the body),
   `src/Text/Decker/Chatty/Seal.hs` + `MetaSeal.hs` (seals at build time).
