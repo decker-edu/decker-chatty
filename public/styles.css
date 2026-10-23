@@ -154,6 +154,13 @@ code, time, .mono, .usage, .sid, .pill, .tag, input,
   max-width: 100%;
   overflow-wrap: anywhere;    /* long prompt ids wrap rather than push the bar wide */
 }
+.pill.accent {
+  background: var(--orange);
+  color: #fff;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
 
 /* ---- cards / panels ---- */
 
@@ -174,14 +181,21 @@ label {
   letter-spacing: 0.04em; color: var(--ink-soft);
 }
 
-input {
+input, select {
   border: var(--border);
   background: var(--paper);
   color: var(--ink);
   padding: 0.6rem 0.7rem;
   font-size: 0.95rem;
 }
-input:focus { outline: 2px solid var(--blue); outline-offset: 2px; }
+input:focus, select:focus { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+.filter { margin-top: 1rem; }
+.filter label {
+  flex-direction: row; align-items: center; gap: 0.6rem;
+  font-size: 0.8rem;
+}
+.filter select { padding: 0.35rem 0.5rem; font-size: 0.85rem; }
 
 button, .btn {
   display: inline-block;

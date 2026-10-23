@@ -120,6 +120,10 @@ export function createAdminRouter({ prompts, store, cookieSecret, mountPath, coo
       return res.redirect(`${mountPath}/login`);
     }
     req.adminPromptId = promptId;
+    // Re-derived live from config on every request (not baked into the
+    // cookie), so flipping superAdmin off in config.json takes effect
+    // immediately rather than waiting for the cookie to expire.
+    req.isSuperAdmin = Boolean(prompts[promptId].superAdmin);
     next();
   }
 
@@ -162,18 +166,54 @@ export function createAdminRouter({ prompts, store, cookieSecret, mountPath, coo
   router.get("/", requireAuth, (req, res) => {
     const promptId = req.adminPromptId;
     const page = Math.max(0, parseInt(req.query.page, 10) || 0);
-    const sessions = store.listSessions(promptId, { limit: PAGE_SIZE, offset: page * PAGE_SIZE });
-    const total = store.countSessions(promptId);
+
+    // Super admins may filter down to one prompt (?prompt=…) or leave it
+    // unset to see every prompt's sessions; anyone else is always scoped to
+    // their own prompt id, filter or not.
+    const requestedFilter = typeof req.query.prompt === "string" ? req.query.prompt : "";
+    const promptFilter = req.isSuperAdmin && prompts[requestedFilter] ? requestedFilter : "";
+    const scope = req.isSuperAdmin ? promptFilter || null : promptId;
+
+    const sessions = store.listSessions(scope, { limit: PAGE_SIZE, offset: page * PAGE_SIZE });
+    const total = store.countSessions(scope);
     const hasNext = (page + 1) * PAGE_SIZE < total;
-    res.type("html").send(listPage({ mountPath, promptId, sessions, page, hasNext }));
+    res.type("html").send(
+      listPage({
+        mountPath,
+        promptId,
+        isSuperAdmin: req.isSuperAdmin,
+        promptIds: req.isSuperAdmin ? Object.keys(prompts).sort() : [],
+        promptFilter,
+        sessions,
+        page,
+        hasNext,
+      })
+    );
   });
 
-  router.get("/session/:id", requireAuth, (req, res) => {
+  router.get("/session/:promptId/:id", requireAuth, (req, res) => {
     const promptId = req.adminPromptId;
+    const targetPromptId = req.params.promptId;
+    // Non-super admins may only ever look at their own prompt's sessions;
+    // reject a mismatched prompt id in the URL the same way a bad session id
+    // would fail (no existence oracle for other prompts' logs).
+    if (!req.isSuperAdmin && targetPromptId !== promptId) {
+      return res.redirect(`${mountPath}/`);
+    }
     const sessionId = req.params.id;
-    const turns = store.getSessionTurns(promptId, sessionId);
+    const turns = store.getSessionTurns(targetPromptId, sessionId);
     const fragment = req.get("HX-Request") === "true";
-    res.type("html").send(sessionDetail({ mountPath, promptId, sessionId, turns, fragment }));
+    res.type("html").send(
+      sessionDetail({
+        mountPath,
+        promptId,
+        isSuperAdmin: req.isSuperAdmin,
+        sessionPromptId: targetPromptId,
+        sessionId,
+        turns,
+        fragment,
+      })
+    );
   });
 
   return router;
