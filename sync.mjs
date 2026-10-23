@@ -12,7 +12,7 @@
 //             X-Chatty-Timestamp: <unix seconds>
 //             X-Chatty-Signature: base64( HMAC-SHA256(deckConfigKey, canonical) )
 //   canonical "decker-chatty-sync-v1" \n promptId \n timestamp \n METHOD \n
-//             path-with-query (relative to the /chatty/sync mount) \n hex(sha256(body))
+//             path-with-query (relative to the /sync mount) \n hex(sha256(body))
 //
 // Only the handful of operations decker's Upload.hs performs are relayed; this
 // is not an open OpenAI passthrough.

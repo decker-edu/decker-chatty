@@ -55,11 +55,11 @@ prompt id as additional authenticated data (AAD). The frozen test vector lives i
 decker's `test/fixtures/chatty-seal-fixture.json`; both this proxy and decker's
 Haskell sealing code are checked against it (`npm test` / `stack test`).
 
-## Vector store sync relay (`/chatty/sync`)
+## Vector store sync relay (`/sync`)
 
 `decker chatty` and `decker publish` keep the deck's OpenAI vector store in sync.
 Decker holds **no OpenAI API key**. Instead it sends those calls to this proxy at
-`<chatty.server>/chatty/sync/...`, signed with the prompt's `deckConfigKey`. The proxy
+`<chatty.server>/sync/...`, signed with the prompt's `deckConfigKey`. The proxy
 checks the signature and forwards the call to OpenAI using that prompt's `apiKey`,
 so the OpenAI key lives only in `config.json`.
 
@@ -69,14 +69,16 @@ so the OpenAI key lives only in `config.json`.
   Timestamps more than 5 minutes off are rejected.
 - Only the vector-store and file operations decker uses are relayed (see
   `ROUTES` in `sync.mjs`). Anything else gets a `404`.
-- File uploads arrive as raw bytes (`POST /chatty/sync/files?filename=…`). The proxy
+- File uploads arrive as raw bytes (`POST /sync/files?filename=…`). The proxy
   turns them into OpenAI's multipart `purpose=assistants` upload.
 - A `401` from the proxy always means the signature was rejected. If OpenAI
   rejects the proxy's own `apiKey`, the proxy returns a `502`.
 - `syncBodyLimit` (optional, default `"50mb"`) caps the upload size.
-- All public routes live under `/chatty` (chat, `/chatty/sync/*`,
-  `/chatty/admin/*`), so a single reverse-proxy matcher such as Caddy's
-  `handle /chatty*` covers them (see `CLAUDE.md`).
+- The proxy serves chat at `POST /`, plus `/sync/*`, `/admin/*` and `/health`,
+  and never needs to know its public prefix. Mount the whole app at the URL a
+  deck's `chatty.server` names and strip that prefix in the reverse proxy; the
+  matcher must include the bare prefix, since that's where chat is POSTed (Caddy
+  example in `CLAUDE.md`).
 
 The signing contract is pinned by decker's `test/fixtures/chatty-sync-fixture.json`
 and mirrored in `test/sync.test.mjs`.

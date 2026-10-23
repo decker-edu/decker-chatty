@@ -8,10 +8,11 @@
 // against the configured key and every data route is scoped to the promptId in
 // the verified cookie — an admin only ever sees their own prompt's traffic.
 //
-// Prefix handling: mount this at a path equal to the public prefix and put it
-// behind a non-stripping Caddy `handle` + `reverse_proxy` (see CLAUDE.md), so
-// internal and external paths match. Pages use <base href="{mountPath}/"> and
-// relative links; redirects use absolute {mountPath}/… Location headers.
+// Prefix handling: the router never needs to know its public path, so a
+// reverse proxy can mount it anywhere (Caddy `handle_path` strips the prefix).
+// Every page lives directly under the router root, so links, form actions and
+// redirect Locations are all relative; the login cookie carries no Path and so
+// defaults to the directory of the login URL, i.e. the public admin root.
 import express from "express";
 import crypto from "node:crypto";
 import path from "node:path";
@@ -29,14 +30,24 @@ const PAGE_SIZE = 50;
 const MAX_FAILS = 5;
 const LOCKOUT_MS = 15 * 60 * 1000;
 
-export function createAdminRouter({ prompts, store, cookieSecret, mountPath, cookieSecure = true }) {
+export function createAdminRouter({ prompts, store, cookieSecret, cookieSecure = true }) {
   // The cookie secret signs the login token; without it we cannot issue or
   // verify sessions, so the admin UI stays off rather than running insecurely.
   if (!cookieSecret || typeof cookieSecret !== "string") return null;
 
   const router = express.Router();
   router.use(express.urlencoded({ extended: false }));
-  router.use("/static", express.static(path.join(import.meta.dirname, "public")));
+  // redirect:false — serve-static's directory redirect builds an absolute
+  // Location that would lose the reverse proxy's prefix.
+  router.use("/static", express.static(path.join(import.meta.dirname, "public"), { redirect: false }));
+
+  // Relative links only resolve against the admin root when its URL ends in a
+  // slash; send ".../admin" to ".../admin/" (relative, so the prefix survives).
+  router.use((req, res, next) => {
+    const [pathname, query] = req.originalUrl.split(/\?(.*)/s);
+    if (req.method !== "GET" || req.path !== "/" || pathname.endsWith("/")) return next();
+    res.redirect(`${path.posix.basename(pathname)}/${query ? `?${query}` : ""}`);
+  });
 
   const fails = new Map(); // promptId -> { count, lockUntil }
 
@@ -96,8 +107,11 @@ export function createAdminRouter({ prompts, store, cookieSecret, mountPath, coo
     return ok && Boolean(entry);
   }
 
+  // No Path attribute: login and logout are both posted to "<admin root>/…", so
+  // the browser's default path is the public admin root, wherever that is. This
+  // keeps the cookie away from the host's other apps without knowing the prefix.
   function setCookie(res, value, maxAgeSec) {
-    const attrs = [`${COOKIE}=${value}`, `Path=${mountPath}`, "HttpOnly", "SameSite=Lax", `Max-Age=${maxAgeSec}`];
+    const attrs = [`${COOKIE}=${value}`, "HttpOnly", "SameSite=Lax", `Max-Age=${maxAgeSec}`];
     if (cookieSecure) attrs.push("Secure");
     res.append("Set-Cookie", attrs.join("; "));
   }
@@ -117,7 +131,7 @@ export function createAdminRouter({ prompts, store, cookieSecret, mountPath, coo
     const cookies = parseCookies(req.headers.cookie);
     const promptId = readToken(cookies[COOKIE]);
     if (!promptId || !prompts[promptId]) {
-      return res.redirect(`${mountPath}/login`);
+      return res.redirect("login");
     }
     req.adminPromptId = promptId;
     // Re-derived live from config on every request (not baked into the
@@ -130,7 +144,7 @@ export function createAdminRouter({ prompts, store, cookieSecret, mountPath, coo
   // ---- routes -------------------------------------------------------------
 
   router.get("/login", (_req, res) => {
-    res.type("html").send(loginPage({ mountPath }));
+    res.type("html").send(loginPage());
   });
 
   router.post("/login", (req, res) => {
@@ -141,7 +155,7 @@ export function createAdminRouter({ prompts, store, cookieSecret, mountPath, coo
       return res
         .status(429)
         .type("html")
-        .send(loginPage({ mountPath, promptId, error: "Too many attempts. Try again later." }));
+        .send(loginPage({ promptId, error: "Too many attempts. Try again later." }));
     }
 
     if (!keyMatches(promptId, key)) {
@@ -150,17 +164,17 @@ export function createAdminRouter({ prompts, store, cookieSecret, mountPath, coo
       return res
         .status(401)
         .type("html")
-        .send(loginPage({ mountPath, promptId, error: "Invalid prompt id or key." }));
+        .send(loginPage({ promptId, error: "Invalid prompt id or key." }));
     }
 
     clearFailures(promptId);
     setCookie(res, makeToken(promptId), MAX_AGE_SEC);
-    res.redirect(`${mountPath}/`);
+    res.redirect("./");
   });
 
   router.post("/logout", (_req, res) => {
     setCookie(res, "", 0);
-    res.redirect(`${mountPath}/login`);
+    res.redirect("login");
   });
 
   router.get("/", requireAuth, (req, res) => {
@@ -179,7 +193,6 @@ export function createAdminRouter({ prompts, store, cookieSecret, mountPath, coo
     const hasNext = (page + 1) * PAGE_SIZE < total;
     res.type("html").send(
       listPage({
-        mountPath,
         promptId,
         isSuperAdmin: req.isSuperAdmin,
         promptIds: req.isSuperAdmin ? Object.keys(prompts).sort() : [],
@@ -191,21 +204,22 @@ export function createAdminRouter({ prompts, store, cookieSecret, mountPath, coo
     );
   });
 
-  router.get("/session/:promptId/:id", requireAuth, (req, res) => {
+  // Flat route (session?prompt=…&id=…) so the transcript page sits at the
+  // admin root like every other page and its relative links still resolve.
+  router.get("/session", requireAuth, (req, res) => {
     const promptId = req.adminPromptId;
-    const targetPromptId = req.params.promptId;
+    const targetPromptId = String(req.query.prompt ?? "");
     // Non-super admins may only ever look at their own prompt's sessions;
     // reject a mismatched prompt id in the URL the same way a bad session id
     // would fail (no existence oracle for other prompts' logs).
     if (!req.isSuperAdmin && targetPromptId !== promptId) {
-      return res.redirect(`${mountPath}/`);
+      return res.redirect("./");
     }
-    const sessionId = req.params.id;
+    const sessionId = String(req.query.id ?? "");
     const turns = store.getSessionTurns(targetPromptId, sessionId);
     const fragment = req.get("HX-Request") === "true";
     res.type("html").send(
       sessionDetail({
-        mountPath,
         promptId,
         isSuperAdmin: req.isSuperAdmin,
         sessionPromptId: targetPromptId,

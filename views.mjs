@@ -4,9 +4,9 @@
 // before it reaches the page; the only unescaped interpolation is our own
 // trusted markup and values we control (ids, counts, timestamps).
 //
-// URLs are prefix-agnostic: a <base href="{mountPath}/"> is emitted and every
-// link/form is relative to it, so the same pages work under any Caddy path
-// prefix as long as the app's mountPath matches the public prefix.
+// URLs are prefix-agnostic: every page lives directly under the admin root and
+// every link/form is relative, so the pages work under any reverse-proxy prefix
+// without the app knowing it.
 
 import { renderMarkdown } from "./markdown.mjs";
 
@@ -18,11 +18,6 @@ export function escapeHtml(s) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
-}
-
-// mountPath like "/chatty/admin" -> base href "/chatty/admin/" (relative links resolve here).
-function baseHref(mountPath) {
-  return (mountPath.endsWith("/") ? mountPath : mountPath + "/");
 }
 
 function truncate(s, n = 120) {
@@ -56,13 +51,12 @@ document.body.addEventListener('htmx:afterSwap', function (e) {
 
 // Full HTML document shell. `body` is trusted markup already assembled by the
 // callers below. loadHtmx/loadMath let the login page skip both.
-function layout({ mountPath, title, body, loadHtmx = true, loadMath = true }) {
+function layout({ title, body, loadHtmx = true, loadMath = true }) {
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<base href="${escapeHtml(baseHref(mountPath))}">
 <title>${escapeHtml(title)}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -77,7 +71,7 @@ ${loadMath ? MATHJAX : ""}
 </html>`;
 }
 
-export function loginPage({ mountPath, promptId = "", error = "" }) {
+export function loginPage({ promptId = "", error = "" } = {}) {
   const body = `
 <main class="wrap narrow">
   <h1 class="logo">Prof.&nbsp;Bot <span>logs</span></h1>
@@ -96,7 +90,7 @@ export function loginPage({ mountPath, promptId = "", error = "" }) {
     </form>
   </div>
 </main>`;
-  return layout({ mountPath, title: "Sign in — Prof. Bot logs", body, loadHtmx: false, loadMath: false });
+  return layout({ title: "Sign in — Prof. Bot logs", body, loadHtmx: false, loadMath: false });
 }
 
 function topbar(promptId, isSuperAdmin) {
@@ -117,7 +111,6 @@ function statusTag(s) {
 }
 
 export function listPage({
-  mountPath,
   promptId,
   isSuperAdmin = false,
   promptIds = [],
@@ -129,7 +122,7 @@ export function listPage({
   const rows = sessions.length
     ? sessions
         .map((s) => {
-          const href = `session/${encodeURIComponent(s.prompt_id)}/${encodeURIComponent(s.session_id)}`;
+          const href = escapeHtml(`session?prompt=${encodeURIComponent(s.prompt_id)}&id=${encodeURIComponent(s.session_id)}`);
           return `
     <a class="row" href="${href}"
        hx-get="${href}"
@@ -189,13 +182,12 @@ ${topbar(promptId, isSuperAdmin)}
     <div class="empty muted">Select a session to view its transcript.</div>
   </section>
 </main>`;
-  return layout({ mountPath, title: heading, body });
+  return layout({ title: heading, body });
 }
 
 // The transcript for one session. Rendered as a full page on direct navigation
 // and as a bare fragment when requested by htmx (partial swap into #detail).
 export function sessionDetail({
-  mountPath,
   promptId,
   isSuperAdmin = false,
   sessionPromptId = promptId,
@@ -240,7 +232,7 @@ ${topbar(promptId, isSuperAdmin)}
   <p><a class="btn" href="${backHref}">‹ All sessions</a></p>
   <section class="detail solo">${inner}</section>
 </main>`;
-  return layout({ mountPath, title: `Session ${sessionId} — ${sessionPromptId}`, body });
+  return layout({ title: `Session ${sessionId} — ${sessionPromptId}`, body });
 }
 
 function safeUsage(json) {

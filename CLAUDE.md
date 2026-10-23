@@ -31,7 +31,7 @@ See decker's `doc/chatty-sealed-config.md` for the full design.
 
 ## Files
 
-- `server.mjs` — Express app, the `/chatty` and `/health` routes, SSE streaming.
+- `server.mjs` — Express app, the chat (`POST /`) and `/health` routes, SSE streaming.
   Also opens the session-log DB, records each sealed turn, and mounts the admin
   router.
 - `seal.mjs` — pure crypto/config helpers (no Express): `decodeKey`,
@@ -65,7 +65,7 @@ npm start        # node server.mjs
 npm test         # node --test (test/*.test.mjs)
 ```
 
-## Request flow (`POST /chatty`)
+## Request flow (`POST /`)
 
 The handler accepts one JSON body and branches on whether a `sealed` blob is
 present:
@@ -117,14 +117,15 @@ logs — that rule is about the console, not this purpose-built store.
 network-error / silent-end). Logging is wrapped so a DB failure can **never**
 break the proxy response.
 
-**Admin auth.** `admin.mjs` mounts at `config.adminMountPath` (default
-`/chatty/admin`)
-and is **only enabled when `config.cookieSecret` is set** (that secret signs the
+**Admin auth.** `admin.mjs` is mounted at `/admin` and is **only enabled when `config.cookieSecret` is set** (that secret signs the
 login cookie). Credentials are **prompt id + that prompt's `deckConfigKey`**,
 compared in constant time (`crypto.timingSafeEqual`); unknown prompt ids take the
 same path as a wrong key (no existence oracle) and there's an in-memory login
 throttle. On success a short (12h) HMAC-signed `HttpOnly; SameSite=Lax` cookie is
-set, scoped to the mount path. Every data route is **scoped to the promptId in
+set with **no `Path` attribute**, so the browser scopes it to the directory of
+the login URL, i.e. the public admin root (`/chatty/admin` behind the Caddy
+setup below). That keeps it away from the host's other apps without the proxy
+knowing its prefix; don't switch it to `Path=/`. Every data route is **scoped to the promptId in
 the verified cookie** — an admin only ever sees their own prompt's traffic. UI is
 server-rendered HTML + htmx (progressive: full-page nav works without JS);
 transcript view returns a bare fragment when `HX-Request: true`.
@@ -144,24 +145,37 @@ Everything else in the UI (previews, ids, errors) stays plain `escapeHtml`.
 `db.deleteBefore` exist (prompt-scoped) but the purge UI is **deferred** — wiring
 a route to them is the only work needed to expose it.
 
-**Behind Caddy (path prefix).** Set `adminMountPath` to the public prefix and use
-a **non-stripping** `handle` so internal and external paths match (pages use
-`<base href="{mountPath}/">` + relative links; redirects use absolute
-`{mountPath}/…`). Example:
+**Behind Caddy (path prefix).** The proxy never knows its public prefix. It
+serves the chat endpoint at `POST /`, the sync relay at `/sync/*`, the admin UI
+at `/admin/*` and `/health`; the reverse proxy mounts the whole app anywhere and
+strips its prefix. A deck's `chatty.server` is exactly that public mount URL:
+decker POSTs chat requests to it as-is and sends sync calls to
+`<chatty.server>/sync/…`. The admin UI keeps this working by using relative URLs only:
+- every page sits directly under the admin root (the transcript is
+  `session?prompt=…&id=…`, not a nested path), so links, form actions and
+  redirect `Location`s are relative and there's no `<base>`;
+- `…/admin` (no trailing slash) is redirected to `admin/`, the one URL where
+  relative links would resolve one level too high;
+- `express.static` runs with `redirect: false`, because its directory redirect
+  builds an absolute `Location` that would lose the prefix.
 
-All public routes live under `/chatty`: the chat endpoint `POST /chatty`, the
-sync relay `/chatty/sync/*` and the admin UI `/chatty/admin/*`. One matcher
-therefore covers everything:
+Example with `chatty.server: "https://example.org/chatty"`. The matcher must
+include the bare `/chatty` (the chat POST); `handle_path /chatty/*` alone misses
+it:
 
 ```caddy
 example.org {
-  handle /chatty* {
-    reverse_proxy 127.0.0.1:3000   # path preserved; chat, sync relay and admin
+  @chatty path /chatty /chatty/*
+  handle @chatty {
+    uri strip_prefix /chatty   # /chatty -> /, /chatty/sync/… -> /sync/…, /chatty/admin/ -> /admin/
+    reverse_proxy 127.0.0.1:3000 {
+      flush_interval -1        # stream SSE replies without buffering
+    }
   }
 }
 ```
 
-## Vector store sync relay (`/chatty/sync/*`)
+## Vector store sync relay (`/sync/*`)
 
 The relay lets decker sync its vector store without holding an OpenAI key. The
 logic lives in `sync.mjs`: `canonicalString`/`sign`, `verifySyncRequest`, the
@@ -171,9 +185,8 @@ unit-tested in `test/sync.test.mjs`. The handler in `server.mjs` is registered
 
 - Auth uses an HMAC-SHA256 signature made with the prompt's `deckConfigKey`, the
   same key decker reads from `chatty-key.json`. The signature covers prompt id,
-  timestamp (±300 s), method, path with query relative to the `/chatty/sync`
-  mount, and
-  sha256 of the body. Unknown prompt ids are checked against a dummy key, so they
+  timestamp (±300 s), method, path with query relative to the `/sync` mount,
+  and sha256 of the body. Unknown prompt ids are checked against a dummy key, so they
   can't be told apart from a bad signature.
 - Only the operations decker's `Upload.hs` performs are relayed. Uploads arrive as
   raw bytes with `?filename=`, and the proxy wraps them into multipart.
@@ -210,7 +223,6 @@ must reproduce that exact blob** — if you touch the crypto, run `npm test` her
   "port": 3000,
   "apiKey": "sk-... optional, legacy fallback for old unsealed decks",
   "dbPath": "./chatty.db (optional; session-log SQLite file)",
-  "adminMountPath": "/chatty/admin (optional; mount path == public Caddy prefix)",
   "cookieSecret": "optional; when set, enables the admin UI and signs its cookie",
   "cookieSecure": true,
   "prompts": {
@@ -223,8 +235,6 @@ must reproduce that exact blob** — if you touch the crypto, run `npm test` her
 ```
 
 - `dbPath` — session log location; defaults to `./chatty.db`. Git-ignored.
-- `adminMountPath` — admin UI mount path; defaults to `/chatty/admin`. Set it equal to
-  the public Caddy prefix (non-stripping `handle`).
 - `cookieSecret` — signs the admin login cookie; **admin UI is disabled without
   it**. Use a long random string.
 - `cookieSecure` — `Secure` flag on the login cookie; keep `true` in production,

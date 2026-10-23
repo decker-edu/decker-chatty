@@ -24,10 +24,10 @@ const app = express();
 app.use(cors()); // relax or remove in production
 
 // Vector-store sync relay for decker (see sync.mjs). Registered before
-// express.json() because the signature covers the raw body bytes. Like the
-// admin UI it lives under /chatty, so one reverse-proxy prefix covers all.
+// express.json() because the signature covers the raw body bytes. Decker calls
+// it at <chatty.server>/sync/…; the reverse proxy decides where that lives.
 app.use(
-  "/chatty/sync",
+  "/sync",
   express.raw({ type: () => true, limit: config.syncBodyLimit || "50mb" }),
   async (req, res) => {
     const reqId = newReqId();
@@ -289,7 +289,9 @@ async function streamUpstream(res, apiKey, body, reqId, logCtx) {
   res.end();
 }
 
-app.post("/chatty", async (req, res) => {
+// The chat endpoint is the app root, so a deck's chatty.server is simply the
+// public URL the reverse proxy mounts this app at.
+app.post("/", async (req, res) => {
   const reqId = newReqId();
   try {
     const { promptId, sealed, prompt, input, previous_response_id, stream } =
@@ -366,23 +368,20 @@ app.post("/chatty", async (req, res) => {
   }
 });
 
-// Admin UI for inspecting session logs. Mounted under a configurable path
-// prefix (default /chatty/admin) and only enabled when a cookieSecret is set,
-// since that secret signs the login cookie. Behind a Caddy `handle_path` that
-// strips the public prefix, the app is reached at the mount path directly.
-const adminMountPath = config.adminMountPath || "/chatty/admin";
+// Admin UI for inspecting session logs, only enabled when a cookieSecret is
+// set, since that secret signs the login cookie. It uses relative URLs only, so
+// the reverse proxy can mount the whole app under any prefix.
 const adminRouter = createAdminRouter({
   prompts,
   store,
   cookieSecret: config.cookieSecret,
-  mountPath: adminMountPath,
   // Secure cookie by default (production is HTTPS via Caddy). Set
   // config.cookieSecure=false only for local plain-HTTP testing.
   cookieSecure: config.cookieSecure !== false,
 });
 if (adminRouter) {
-  app.use(adminMountPath, adminRouter);
-  console.log(`[chatty] admin UI mounted at ${adminMountPath}`);
+  app.use("/admin", adminRouter);
+  console.log("[chatty] admin UI mounted at /admin");
 } else {
   console.log("[chatty] admin UI disabled (set config.cookieSecret to enable)");
 }

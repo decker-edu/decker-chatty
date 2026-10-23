@@ -6,7 +6,7 @@ After=network.target
 Type=simple
 User=tramberend-admin
 WorkingDirectory=/home/tramberend-admin/server/decker-chatty
-ExecStart=/usr/bin/node server.mjs
+ExecStart=/home/linuxbrew/.linuxbrew/bin/node server.mjs
 Restart=on-failure
 RestartSec=10
 # Logs go to the journal (journalctl -u decker-chatty); no file redirect.
