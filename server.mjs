@@ -6,13 +6,10 @@ import cors from "cors";
 
 import config from "./config.json" with { type: "json" };
 import { loadPrompts, openConfig, buildUpstreamBody } from "./seal.mjs";
+import { verifySyncRequest, routeSync, buildUpstreamRequest } from "./sync.mjs";
 import { extractLogFields } from "./logging.mjs";
 import { openDb } from "./db.mjs";
 import { createAdminRouter } from "./admin.mjs";
-
-const app = express();
-app.use(cors()); // relax or remove in production
-app.use(express.json()); // parse JSON bodies
 
 // Decode and validate every deck-config key at startup (fail fast).
 let prompts;
@@ -22,6 +19,78 @@ try {
   console.error(`[chatty] fatal: invalid config.json: ${err.message}`);
   process.exit(1);
 }
+
+const app = express();
+app.use(cors()); // relax or remove in production
+
+// Vector-store sync relay for decker (see sync.mjs). Registered before
+// express.json() because the signature covers the raw body bytes. Like the
+// admin UI it lives under /chatty, so one reverse-proxy prefix covers all.
+app.use(
+  "/chatty/sync",
+  express.raw({ type: () => true, limit: config.syncBodyLimit || "50mb" }),
+  async (req, res) => {
+    const reqId = newReqId();
+    const promptId = req.get("x-chatty-prompt");
+    const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    const verdict = verifySyncRequest(
+      prompts,
+      {
+        promptId,
+        timestamp: req.get("x-chatty-timestamp"),
+        signature: req.get("x-chatty-signature"),
+        method: req.method,
+        path: req.url,
+        body,
+      },
+      Math.floor(Date.now() / 1000)
+    );
+    if (!verdict.ok) {
+      console.warn(
+        `[chatty ${reqId}] sync rejected promptId=${promptId} reason=${verdict.reason}`
+      );
+      return fail(res, reqId, 401, "sync request not authorized");
+    }
+
+    const route = routeSync(req.method, req.url);
+    if (!route) {
+      console.warn(`[chatty ${reqId}] sync unsupported ${req.method} ${req.url}`);
+      return fail(res, reqId, 404, "unsupported sync operation");
+    }
+
+    const { url, init } = buildUpstreamRequest(route, {
+      body,
+      apiKey: verdict.entry.apiKey,
+    });
+    let upstream;
+    try {
+      upstream = await fetch(url, init);
+    } catch (err) {
+      console.error(`[chatty ${reqId}] sync failed to reach OpenAI: ${err.message}`);
+      return fail(res, reqId, 502, "could not reach OpenAI");
+    }
+    console.log(
+      `[chatty ${reqId}] sync promptId=${promptId} ${req.method} ${req.url} -> ${upstream.status}`
+    );
+    const text = await upstream.text();
+    // A 401 from OpenAI means *our* apiKey is bad. Don't pass it through: to
+    // decker a 401 means its own signature was rejected.
+    if (upstream.status === 401) {
+      console.error(
+        `[chatty ${reqId}] sync: OpenAI rejected the apiKey for promptId=${promptId} body=${text}`
+      );
+      return fail(res, reqId, 502, "OpenAI rejected the proxy's apiKey for this prompt");
+    }
+    // Otherwise OpenAI's response is forwarded unchanged so decker parses it
+    // as before.
+    res
+      .status(upstream.status)
+      .type(upstream.headers.get("content-type") || "application/json")
+      .send(text);
+  }
+);
+
+app.use(express.json()); // parse JSON bodies
 
 // Session-log store. Opened unconditionally (cheap) so every sealed turn is
 // recorded; the admin UI that reads it back is mounted separately below and is
@@ -298,10 +367,10 @@ app.post("/chatty", async (req, res) => {
 });
 
 // Admin UI for inspecting session logs. Mounted under a configurable path
-// prefix (default /admin) and only enabled when a cookieSecret is set, since
-// that secret signs the login cookie. Behind a Caddy `handle_path` that strips
-// the public prefix, the app is reached at the mount path directly.
-const adminMountPath = config.adminMountPath || "/admin";
+// prefix (default /chatty/admin) and only enabled when a cookieSecret is set,
+// since that secret signs the login cookie. Behind a Caddy `handle_path` that
+// strips the public prefix, the app is reached at the mount path directly.
+const adminMountPath = config.adminMountPath || "/chatty/admin";
 const adminRouter = createAdminRouter({
   prompts,
   store,

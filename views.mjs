@@ -20,7 +20,7 @@ export function escapeHtml(s) {
     .replaceAll("'", "&#39;");
 }
 
-// mountPath like "/admin" -> base href "/admin/" (relative links resolve here).
+// mountPath like "/chatty/admin" -> base href "/chatty/admin/" (relative links resolve here).
 function baseHref(mountPath) {
   return (mountPath.endsWith("/") ? mountPath : mountPath + "/");
 }

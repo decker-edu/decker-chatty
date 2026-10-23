@@ -117,7 +117,8 @@ logs — that rule is about the console, not this purpose-built store.
 network-error / silent-end). Logging is wrapped so a DB failure can **never**
 break the proxy response.
 
-**Admin auth.** `admin.mjs` mounts at `config.adminMountPath` (default `/admin`)
+**Admin auth.** `admin.mjs` mounts at `config.adminMountPath` (default
+`/chatty/admin`)
 and is **only enabled when `config.cookieSecret` is set** (that secret signs the
 login cookie). Credentials are **prompt id + that prompt's `deckConfigKey`**,
 compared in constant time (`crypto.timingSafeEqual`); unknown prompt ids take the
@@ -148,16 +149,43 @@ a **non-stripping** `handle` so internal and external paths match (pages use
 `<base href="{mountPath}/">` + relative links; redirects use absolute
 `{mountPath}/…`). Example:
 
+All public routes live under `/chatty`: the chat endpoint `POST /chatty`, the
+sync relay `/chatty/sync/*` and the admin UI `/chatty/admin/*`. One matcher
+therefore covers everything:
+
 ```caddy
 example.org {
-  handle /admin/* {
-    reverse_proxy 127.0.0.1:3000   # path preserved; app mounts at /admin
-  }
-  handle /chatty {
-    reverse_proxy 127.0.0.1:3000
+  handle /chatty* {
+    reverse_proxy 127.0.0.1:3000   # path preserved; chat, sync relay and admin
   }
 }
 ```
+
+## Vector store sync relay (`/chatty/sync/*`)
+
+The relay lets decker sync its vector store without holding an OpenAI key. The
+logic lives in `sync.mjs`: `canonicalString`/`sign`, `verifySyncRequest`, the
+`ROUTES` allowlist with `routeSync`, and `buildUpstreamRequest`. It is pure and
+unit-tested in `test/sync.test.mjs`. The handler in `server.mjs` is registered
+**before** `express.json()` because the HMAC covers the raw body bytes.
+
+- Auth uses an HMAC-SHA256 signature made with the prompt's `deckConfigKey`, the
+  same key decker reads from `chatty-key.json`. The signature covers prompt id,
+  timestamp (±300 s), method, path with query relative to the `/chatty/sync`
+  mount, and
+  sha256 of the body. Unknown prompt ids are checked against a dummy key, so they
+  can't be told apart from a bad signature.
+- Only the operations decker's `Upload.hs` performs are relayed. Uploads arrive as
+  raw bytes with `?filename=`, and the proxy wraps them into multipart.
+- A `401` always means the signature was rejected. If OpenAI returns a 401 for our
+  `apiKey`, the proxy maps it to `502`.
+- The contract is shared with decker's `Text.Decker.Chatty.Sync`. The fixture is
+  in decker's `test/fixtures/chatty-sync-fixture.json`, and both test suites
+  check it.
+- Not yet scoped per store: a holder of a prompt's `deckConfigKey` can reach any
+  vector store and file under that prompt's `apiKey`, including `--prune-files`
+  deleting every `assistants` file in the project. Give each prompt its own
+  OpenAI project key when prompts must be kept apart.
 
 Keep `cookieSecure: true` in production (HTTPS via Caddy); set it to `false` only
 for local plain-HTTP testing.
@@ -182,7 +210,7 @@ must reproduce that exact blob** — if you touch the crypto, run `npm test` her
   "port": 3000,
   "apiKey": "sk-... optional, legacy fallback for old unsealed decks",
   "dbPath": "./chatty.db (optional; session-log SQLite file)",
-  "adminMountPath": "/admin (optional; mount path == public Caddy prefix)",
+  "adminMountPath": "/chatty/admin (optional; mount path == public Caddy prefix)",
   "cookieSecret": "optional; when set, enables the admin UI and signs its cookie",
   "cookieSecure": true,
   "prompts": {
@@ -195,7 +223,7 @@ must reproduce that exact blob** — if you touch the crypto, run `npm test` her
 ```
 
 - `dbPath` — session log location; defaults to `./chatty.db`. Git-ignored.
-- `adminMountPath` — admin UI mount path; defaults to `/admin`. Set it equal to
+- `adminMountPath` — admin UI mount path; defaults to `/chatty/admin`. Set it equal to
   the public Caddy prefix (non-stripping `handle`).
 - `cookieSecret` — signs the admin login cookie; **admin UI is disabled without
   it**. Use a long random string.
