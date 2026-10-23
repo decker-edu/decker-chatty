@@ -54,8 +54,8 @@ See decker's `doc/chatty-sealed-config.md` for the full design.
   `config-example.json`.
 - `config-example.json` — committed placeholder config.
 - `chatty.db` — **git-ignored** SQLite session log (created at runtime).
-- `decker-chatty.service` — systemd unit (runs `node server.mjs`, logs to
-  `chatty.log`).
+- `decker-chatty.service` — systemd unit (runs Homebrew's node on this host, logs
+  to the journal: `journalctl -u decker-chatty`).
 
 ## Commands
 
