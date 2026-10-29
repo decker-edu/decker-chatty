@@ -1,0 +1,12 @@
+# Keep secrets, runtime data and local junk out of the build context.
+config.json
+chatty.db
+chatty.db-*
+chatty.log
+log
+node_modules
+.git
+.github
+test
+*.service
+docker-compose*.yml

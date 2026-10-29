@@ -95,7 +95,9 @@ app.use(express.json()); // parse JSON bodies
 // Session-log store. Opened unconditionally (cheap) so every sealed turn is
 // recorded; the admin UI that reads it back is mounted separately below and is
 // only enabled when a cookieSecret is configured.
-const store = openDb(config.dbPath || "./chatty.db");
+// DB_PATH wins over config.dbPath, like PORT over config.port (the Docker image
+// sets it so the log lands on the /data volume).
+const store = openDb(process.env.DB_PATH || config.dbPath || "./chatty.db");
 
 // Build the row for one proxied turn and persist it. Wrapped so a logging
 // failure can never break the proxy path — the turn is best-effort telemetry,
