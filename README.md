@@ -71,7 +71,7 @@ holds secrets and is git-ignored):
 Node ≥ 22.5 is required (built-in `node:sqlite`).
 
 ``` bash
-npm install
+npm ci       # or npm install to update package-lock.json
 npm start
 npm test     # unit tests (crypto and sync contracts, logging, store, markdown)
 ```

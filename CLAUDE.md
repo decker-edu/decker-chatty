@@ -68,7 +68,7 @@ See decker's `doc/chatty-sealed-config.md` for the full design.
 ## Commands
 
 ```sh
-npm install
+npm ci           # or npm install to update package-lock.json
 npm start        # node server.mjs
 npm test         # node --test (test/*.test.mjs)
 ```
