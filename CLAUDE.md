@@ -56,6 +56,14 @@ See decker's `doc/chatty-sealed-config.md` for the full design.
 - `chatty.db` — **git-ignored** SQLite session log (created at runtime).
 - `decker-chatty.service` — systemd unit (runs Homebrew's node on this host, logs
   to the journal: `journalctl -u decker-chatty`).
+- `Dockerfile` / `.dockerignore` / `docker-compose.yml` — the alternative Docker
+  deployment. The image (`node:24-alpine`, runs as `node`) carries **no
+  secrets**: `config.json` is mounted read-only at `/app/config.json`, the
+  session log lives on the `/data` volume (`DB_PATH=/data/chatty.db`). Keep
+  `config.json` and `chatty.db*` in `.dockerignore`.
+- `.github/workflows/docker.yml` — CI: `npm test`, then build amd64/arm64 and
+  push to `ghcr.io/decker-edu/decker-chatty` (`latest` from `main`, semver tags
+  from `v*` tags; PRs build without pushing).
 
 ## Commands
 
@@ -235,6 +243,8 @@ must reproduce that exact blob** — if you touch the crypto, run `npm test` her
 ```
 
 - `dbPath` — session log location; defaults to `./chatty.db`. Git-ignored.
+  The `DB_PATH` env var overrides it (as `PORT` overrides `port`); the Docker
+  image sets both.
 - `cookieSecret` — signs the admin login cookie; **admin UI is disabled without
   it**. Use a long random string.
 - `cookieSecure` — `Secure` flag on the login cookie; keep `true` in production,

@@ -58,7 +58,8 @@ holds secrets and is git-ignored):
 - `superAdmin` (optional) — this prompt's admin login may read every prompt's
   session log, not just its own.
 - `port` — listen port (default `3000`; the `PORT` environment variable wins).
-- `dbPath` (optional, default `./chatty.db`) — the SQLite session log.
+- `dbPath` (optional, default `./chatty.db`) — the SQLite session log (the
+  `DB_PATH` environment variable wins).
 - `cookieSecret` (optional) — signs the admin login cookie. **The admin UI is
   disabled without it.** Generate with `openssl rand -base64 48`.
 - `cookieSecure` (default `true`) — `Secure` flag on the login cookie. Set it to
@@ -206,6 +207,78 @@ OpenAI as-is (the old stored-prompt path), using the **top-level** `apiKey`. The
 selectors, so it is **not** looked up in `prompts`. If no top-level `apiKey` is
 set, legacy requests get a `400`. Remove the top-level key once all decks have
 been recompiled with sealed config (and OpenAI removes stored prompts).
+
+# Deployment
+
+Two options: the Docker image (below) or a systemd service running straight
+from a checkout (*Running as a systemd service*). Both read the same
+`config.json` and sit behind the same Caddy setup.
+
+# Running with Docker
+
+GitHub Actions (`.github/workflows/docker.yml`) runs the tests and then builds a
+multi-arch (amd64/arm64) image and pushes it to the GitHub Container Registry:
+
+| Trigger            | Tags                                  |
+| ------------------ | ------------------------------------- |
+| push to `main`     | `latest`, `sha-<short>`               |
+| tag `v1.2.3`       | `1.2.3`, `1.2`, `sha-<short>`         |
+| pull request       | built and tested, not pushed          |
+
+```
+ghcr.io/decker-edu/decker-chatty
+```
+
+The image contains no secrets. `config.json` is mounted at runtime, and the
+session log goes to the `/data` volume. The image sets `PORT=3000` and
+`DB_PATH=/data/chatty.db`, which override `port` and `dbPath` from
+`config.json`, so you can use the same file for systemd and Docker. The process
+runs as the unprivileged `node` user, and a `HEALTHCHECK` polls `/health`.
+
+## Installation
+
+Copy `docker-compose.yml` and a filled-in `config.json` to a directory on the
+host. A checkout is not required:
+
+``` bash
+cp config-example.json config.json   # then fill in the real secrets
+chmod 644 config.json                # the container's node user must be able to read it
+docker compose up -d
+```
+
+The example compose file publishes the proxy on `127.0.0.1:3000` only, which
+matches the Caddy config above when Caddy runs on the host. If Caddy runs in
+Docker, drop `ports`, put both containers on a shared network (see the commented
+lines in `docker-compose.yml`) and use `reverse_proxy chatty:3000`.
+
+If the GHCR package is private, run `docker login ghcr.io` first with a token
+that has `read:packages`. Alternatively, make the package public in its GitHub
+settings.
+
+## Usage
+
+``` bash
+docker compose logs -f chatty     # console log
+docker compose ps                 # status + health
+docker compose restart chatty     # after a config.json change
+docker compose pull && docker compose up -d   # update to the latest image
+```
+
+To build locally instead of pulling, run `docker build -t decker-chatty .` and set
+`image: decker-chatty` in the compose file.
+
+## Moving the session log from systemd to Docker
+
+Stop the systemd service first, so the SQLite WAL is checkpointed into
+`chatty.db`. Then copy the file into the volume:
+
+``` bash
+sudo systemctl stop decker-chatty.service
+docker compose create
+docker compose cp chatty.db chatty:/data/chatty.db
+docker compose run --rm --user root --entrypoint chown chatty node:node /data/chatty.db
+docker compose up -d
+```
 
 # Running as a systemd service
 

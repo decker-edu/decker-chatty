@@ -1,0 +1,29 @@
+# Example deployment of decker-chatty from the prebuilt image.
+#
+#   cp config-example.json config.json   # then fill in the real secrets
+#   docker compose up -d
+#
+# config.json is mounted read-only; its "port" and "dbPath" are overridden by
+# the PORT and DB_PATH variables set in the image, so the same file also works
+# for the systemd setup. The session log lives in the "chatty-data" volume.
+services:
+  chatty:
+    image: ghcr.io/decker-edu/decker-chatty:latest
+    restart: unless-stopped
+    volumes:
+      - ./config.json:/app/config.json:ro
+      - chatty-data:/data
+    ports:
+      # Only reachable from the host: Caddy on the host proxies to 127.0.0.1:3000.
+      - "127.0.0.1:3000:3000"
+    # If Caddy runs in Docker instead, drop "ports", join Caddy's network and
+    # use `reverse_proxy chatty:3000` in the Caddyfile:
+    # networks:
+    #   - caddy
+
+volumes:
+  chatty-data:
+
+# networks:
+#   caddy:
+#     external: true
