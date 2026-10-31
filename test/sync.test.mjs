@@ -106,6 +106,10 @@ test("routeSync allows exactly the operations decker performs", () => {
   });
   assert.equal(routeSync("POST", "/vector_stores").kind, "json");
   assert.equal(
+    routeSync("GET", "/vector_stores?limit=100&after=vs_1").upstreamPath,
+    "/vector_stores?limit=100&after=vs_1"
+  );
+  assert.equal(
     routeSync("GET", "/vector_stores/vs_1/files?limit=100&after=file-x")
       .upstreamPath,
     "/vector_stores/vs_1/files?limit=100&after=file-x"

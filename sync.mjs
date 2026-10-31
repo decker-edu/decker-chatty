@@ -80,6 +80,7 @@ const ID = "[A-Za-z0-9_-]+";
 // method, path regex (no query), body kind. "upload" is a raw file body that
 // the proxy wraps into OpenAI's multipart /files upload.
 const ROUTES = [
+  ["GET", new RegExp(`^/vector_stores$`), "none"],
   ["GET", new RegExp(`^/vector_stores/${ID}$`), "none"],
   ["POST", new RegExp(`^/vector_stores$`), "json"],
   ["GET", new RegExp(`^/vector_stores/${ID}/files$`), "none"],
