@@ -113,7 +113,13 @@ whose `response_id` it replies to (found via the captured `response.completed`
 id). Sessions are **anonymous** — the proxy sees no student identity.
 
 **What is stored / not stored.** Input text, output text, model, usage, status
-and errors are stored in full (that's the point). **Never stored:** api keys and
+and errors are stored in full (that's the point). Decker sends `input` as an
+array whose last item is the student's question and whose earlier items are
+deck/slide info ("I am watching slide deck …", whiteboard notes); `splitInput`
+stores the question in `input_text` and the rest in `context_text` (images
+dropped), and the transcript shows the context collapsed. Rows from before that
+split are separated on read by `splitStoredInput` (stored data untouched);
+`openDb` adds the `context_text` column to older databases. **Never stored:** api keys and
 the decrypted `instructions` — the admin who reads the log already authored the
 instructions, and `extractLogFields` has no field that could carry them (there's
 a unit test asserting this). This is a **deliberate reversal** of the

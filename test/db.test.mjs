@@ -130,3 +130,46 @@ test("error turns are logged too (status preserved)", () => {
   assert.equal(session.error_count, 1);
   store.close();
 });
+
+test("context_text is stored and returned separately from the question", () => {
+  const store = openDb(":memory:");
+  const s = store.insertTurn(
+    baseRow({ response_id: "c1", input_text: "Why?", context_text: 'I am watching slide deck "d".' }),
+    "2026-01-01T10:00:00.000Z"
+  );
+  const [t] = store.getSessionTurns("p1", s);
+  assert.equal(t.input_text, "Why?");
+  assert.equal(t.context_text, 'I am watching slide deck "d".');
+  assert.equal(store.listSessions("p1")[0].preview, "Why?");
+});
+
+test("legacy rows with decker's preamble in input_text are split on read", () => {
+  const store = openDb(":memory:");
+  const joined =
+    'I am watching slide deck "d". The current slide has the title "T".\n' +
+    "The current slide does not contain hand-written annotations.\n" +
+    "What is T?";
+  const s = store.insertTurn(baseRow({ response_id: "l1", input_text: joined }), "2026-01-01T10:00:00.000Z");
+  const [t] = store.getSessionTurns("p1", s);
+  assert.equal(t.input_text, "What is T?");
+  assert.match(t.context_text, /^I am watching slide deck "d"/);
+  assert.equal(store.listSessions("p1")[0].preview, "What is T?");
+});
+
+test("opening a pre-context_text database adds the column", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "chatty-")), "old.db");
+  const old = new DatabaseSync(file);
+  old.exec(`CREATE TABLE turns (
+    id INTEGER PRIMARY KEY, req_id TEXT, prompt_id TEXT NOT NULL, session_id TEXT NOT NULL,
+    response_id TEXT, previous_response_id TEXT, created_at TEXT NOT NULL, model TEXT,
+    input_text TEXT, output_text TEXT, usage_json TEXT, status TEXT, error_message TEXT);`);
+  old.close();
+  const store = openDb(file);
+  const s = store.insertTurn(baseRow({ response_id: "m1", context_text: "ctx" }), "2026-01-01T10:00:00.000Z");
+  assert.equal(store.getSessionTurns("p1", s)[0].context_text, "ctx");
+  store.close();
+});

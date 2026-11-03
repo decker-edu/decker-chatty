@@ -11,32 +11,62 @@
 //   response.incomplete -> { response: { id, incomplete_details: { reason } } }
 //   error               -> { error: { code, message } }   (no response object)
 
-// The user's message. `input` is what the deck sent: usually a plain string,
-// but the Responses API also accepts an array of message items, so pull text
-// out of any user-role content parts as a fallback.
-export function extractInputText(input) {
-  if (input == null) return null;
-  if (typeof input === "string") return input;
-  if (Array.isArray(input)) {
+// Text of one input item (a string or a message item with string / content-part
+// content). Non-text parts (e.g. input_image) are skipped. null if no text.
+function itemText(item) {
+  if (typeof item === "string") return item;
+  const content = item?.content;
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
     const parts = [];
-    for (const item of input) {
-      if (typeof item === "string") {
-        parts.push(item);
-        continue;
-      }
-      const content = item?.content;
-      if (typeof content === "string") {
-        parts.push(content);
-      } else if (Array.isArray(content)) {
-        for (const c of content) {
-          if (typeof c === "string") parts.push(c);
-          else if (typeof c?.text === "string") parts.push(c.text);
-        }
-      }
+    for (const c of content) {
+      if (typeof c === "string") parts.push(c);
+      else if (typeof c?.text === "string") parts.push(c.text);
     }
     return parts.length ? parts.join("\n") : null;
   }
   return null;
+}
+
+// Split what the deck sent into the student's own question and the context the
+// deck adds around it. Decker's chatty.js sends an array whose *last* item is
+// the typed question and whose earlier items describe the deck and current
+// slide ("I am watching slide deck …", whiteboard annotations). Showing those
+// in the question bubble repeats the same boilerplate on every turn, so they
+// are kept apart as `context`. A plain string is all question.
+export function splitInput(input) {
+  if (input == null) return { question: null, context: null };
+  if (typeof input === "string") return { question: input, context: null };
+  if (!Array.isArray(input) || input.length === 0) {
+    return { question: null, context: null };
+  }
+  const question = itemText(input[input.length - 1]);
+  const ctx = input
+    .slice(0, -1)
+    .map(itemText)
+    .filter((t) => t != null);
+  return { question, context: ctx.length ? ctx.join("\n") : null };
+}
+
+// Rows logged before splitInput existed hold the whole array joined by "\n",
+// starting with decker's fixed context sentences. Peel those off for display
+// so old transcripts read the same as new ones. Text that doesn't start with
+// decker's preamble is returned unchanged as the question.
+const LEGACY_DECK_LINE = /^I am watching slide deck ".*$/;
+const LEGACY_ANNOT_LINES = [
+  /^The current slide does not contain hand-written annotations\.$/,
+  /^In addition to the content from .* the current slide also contains additional hand-written annotations or drawings that are provided in the following image\.$/,
+];
+export function splitStoredInput(text) {
+  if (typeof text !== "string") return { question: text ?? null, context: null };
+  const lines = text.split("\n");
+  if (!LEGACY_DECK_LINE.test(lines[0])) return { question: text, context: null };
+  let n = 1;
+  if (lines.length > 1 && LEGACY_ANNOT_LINES.some((re) => re.test(lines[1]))) n = 2;
+  return {
+    question: lines.slice(n).join("\n"),
+    context: lines.slice(0, n).join("\n"),
+  };
 }
 
 // The assistant's answer text out of a completed `response` object. Prefer the
@@ -71,13 +101,15 @@ export function extractLogFields({
   previous_response_id,
   terminalEvent,
 }) {
+  const { question, context } = splitInput(input);
   const row = {
     req_id: reqId ?? null,
     prompt_id: promptId,
     previous_response_id: previous_response_id ?? null,
     response_id: null,
     model: null,
-    input_text: extractInputText(input),
+    input_text: question,
+    context_text: context,
     output_text: null,
     usage_json: null,
     status: "unknown",

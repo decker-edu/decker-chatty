@@ -12,6 +12,7 @@
 // feature and are stored in full.
 import { DatabaseSync } from "node:sqlite";
 import crypto from "node:crypto";
+import { splitStoredInput } from "./logging.mjs";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS turns (
@@ -23,7 +24,8 @@ CREATE TABLE IF NOT EXISTS turns (
   previous_response_id TEXT,
   created_at           TEXT NOT NULL,   -- ISO8601 UTC
   model                TEXT,
-  input_text           TEXT,
+  input_text           TEXT,            -- the student's own question
+  context_text         TEXT,            -- deck/slide info decker sends along
   output_text          TEXT,
   usage_json           TEXT,
   status               TEXT,            -- completed | failed | incomplete | error | unknown
@@ -43,7 +45,21 @@ export function openDb(path) {
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec(SCHEMA);
+  // Databases created before context_text existed: add the column in place.
+  const cols = db.prepare("PRAGMA table_info(turns)").all().map((c) => c.name);
+  if (!cols.includes("context_text")) {
+    db.exec("ALTER TABLE turns ADD COLUMN context_text TEXT;");
+  }
   return makeApi(db);
+}
+
+// Rows logged before context_text existed carry decker's slide preamble inside
+// input_text; split it off on read so old and new rows look the same. The
+// stored data is left untouched.
+function withContext(row) {
+  if (row.context_text != null) return row;
+  const { question, context } = splitStoredInput(row.input_text);
+  return context == null ? row : { ...row, input_text: question, context_text: context };
 }
 
 function makeApi(db) {
@@ -53,9 +69,10 @@ function makeApi(db) {
   const stmtInsert = db.prepare(`
     INSERT INTO turns
       (req_id, prompt_id, session_id, response_id, previous_response_id,
-       created_at, model, input_text, output_text, usage_json, status, error_message)
+       created_at, model, input_text, context_text, output_text, usage_json,
+       status, error_message)
     VALUES
-      (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   // One row per proxied turn. `row` is what logging.extractLogFields produced,
@@ -82,6 +99,7 @@ function makeApi(db) {
       now,
       row.model ?? null,
       row.input_text ?? null,
+      row.context_text ?? null,
       row.output_text ?? null,
       row.usage_json ?? null,
       row.status ?? null,
@@ -125,7 +143,7 @@ function makeApi(db) {
     LIMIT ? OFFSET ?
   `);
   const stmtFirstInput = db.prepare(`
-    SELECT input_text FROM turns
+    SELECT input_text, context_text FROM turns
     WHERE prompt_id = ? AND session_id = ?
     ORDER BY created_at ASC, id ASC
     LIMIT 1
@@ -137,7 +155,7 @@ function makeApi(db) {
         : stmtListSessions.all(promptId, limit, offset);
     for (const r of rows) {
       const first = stmtFirstInput.get(r.prompt_id, r.session_id);
-      r.preview = first?.input_text ?? "";
+      r.preview = first ? withContext(first).input_text ?? "" : "";
     }
     return rows;
   }
@@ -158,13 +176,13 @@ function makeApi(db) {
   // prompt_id so a guessed session id from another prompt returns nothing.
   const stmtSessionTurns = db.prepare(`
     SELECT id, req_id, response_id, previous_response_id, created_at, model,
-           input_text, output_text, usage_json, status, error_message
+           input_text, context_text, output_text, usage_json, status, error_message
     FROM turns
     WHERE prompt_id = ? AND session_id = ?
     ORDER BY created_at ASC, id ASC
   `);
   function getSessionTurns(promptId, sessionId) {
-    return stmtSessionTurns.all(promptId, sessionId);
+    return stmtSessionTurns.all(promptId, sessionId).map(withContext);
   }
 
   // Purge helpers — wired for a future admin UI (deferred). Both are scoped to

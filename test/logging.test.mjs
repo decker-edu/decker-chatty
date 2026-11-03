@@ -1,26 +1,71 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  extractInputText,
+  splitInput,
+  splitStoredInput,
   extractOutputText,
   extractLogFields,
 } from "../logging.mjs";
 
-test("extractInputText: plain string passes through", () => {
-  assert.equal(extractInputText("hello prof"), "hello prof");
+test("splitInput: plain string is all question", () => {
+  assert.deepEqual(splitInput("hello prof"), { question: "hello prof", context: null });
 });
 
-test("extractInputText: array of message items with content parts", () => {
+test("splitInput: last item is the question, earlier items are context", () => {
   const input = [
     { role: "user", content: [{ type: "input_text", text: "part one" }] },
     { role: "user", content: "part two" },
   ];
-  assert.equal(extractInputText(input), "part one\npart two");
+  assert.deepEqual(splitInput(input), { question: "part two", context: "part one" });
 });
 
-test("extractInputText: null / empty", () => {
-  assert.equal(extractInputText(null), null);
-  assert.equal(extractInputText([]), null);
+test("splitInput: decker's slide-info array (with whiteboard image)", () => {
+  const input = [
+    { role: "user", content: 'I am watching slide deck "intro-deck". The current slide has the title "Loops" and fragment identifier #/3.' },
+    {
+      role: "user",
+      content: [
+        { type: "input_text", text: "In addition to the content from intro-deck the current slide also contains additional hand-written annotations or drawings that are provided in the following image." },
+        { type: "input_image", image_url: "data:image/png;base64,AAAA" },
+      ],
+    },
+    { role: "user", content: "What is a for loop?" },
+  ];
+  const { question, context } = splitInput(input);
+  assert.equal(question, "What is a for loop?");
+  assert.match(context, /^I am watching slide deck "intro-deck"/);
+  assert.match(context, /hand-written annotations/);
+  assert.ok(!context.includes("base64"));
+});
+
+test("splitInput: null / empty", () => {
+  assert.deepEqual(splitInput(null), { question: null, context: null });
+  assert.deepEqual(splitInput([]), { question: null, context: null });
+});
+
+test("splitStoredInput: peels decker's preamble off legacy joined rows", () => {
+  const ctx =
+    'I am watching slide deck "intro-deck". The current slide has the title "Loops" and fragment identifier #/3.\n' +
+    "The current slide does not contain hand-written annotations.";
+  assert.deepEqual(splitStoredInput(`${ctx}\nline one\nline two`), {
+    question: "line one\nline two",
+    context: ctx,
+  });
+});
+
+test("splitStoredInput: annotation variant", () => {
+  const ctx =
+    'I am watching slide deck "d". The current slide has the title "T".\n' +
+    "In addition to the content from d the current slide also contains additional hand-written annotations or drawings that are provided in the following image.";
+  assert.deepEqual(splitStoredInput(`${ctx}\nwhy?`), { question: "why?", context: ctx });
+});
+
+test("splitStoredInput: ordinary text is left alone", () => {
+  assert.deepEqual(splitStoredInput("just a question\nI am watching slide deck \"x\""), {
+    question: 'just a question\nI am watching slide deck "x"',
+    context: null,
+  });
+  assert.deepEqual(splitStoredInput(null), { question: null, context: null });
 });
 
 test("extractOutputText: prefers aggregated output_text", () => {
@@ -133,6 +178,7 @@ test("extractLogFields: never stores instructions or keys", () => {
   assert.deepEqual(
     Object.keys(row).sort(),
     [
+      "context_text",
       "error_message",
       "input_text",
       "model",

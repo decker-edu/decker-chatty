@@ -285,6 +285,11 @@ button.ghost { background: var(--paper-high); color: var(--ink); }
 .bubble.bot .who { background: var(--blue); color: #fff; }
 .bubble .text { word-wrap: break-word; overflow-wrap: anywhere; }
 
+/* deck/slide info decker sends with each question: collapsed by default */
+.context { margin-top: 0.5rem; font-family: var(--ff-mono); font-size: 0.72rem; color: var(--ink-mute); }
+.context summary { cursor: pointer; text-transform: uppercase; letter-spacing: 0.08em; }
+.context .ctx-text { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 0.25rem; }
+
 /* rendered markdown inside transcript bubbles */
 .md > :first-child { margin-top: 0; }
 .md > :last-child { margin-bottom: 0; }

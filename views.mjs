@@ -207,6 +207,7 @@ export function sessionDetail({
         <span class="spacer"></span>
         <time>${escapeHtml(fmtDate(t.created_at))}</time>
       </div>
+      ${t.context_text ? `<details class="context"><summary>slide context</summary><div class="ctx-text">${escapeHtml(t.context_text)}</div></details>` : ""}
       ${t.input_text ? `<div class="bubble user"><span class="who">Student</span><div class="text md">${renderMarkdown(t.input_text)}</div></div>` : ""}
       ${t.output_text ? `<div class="bubble bot"><span class="who">Prof. Bot</span><div class="text md">${renderMarkdown(t.output_text)}</div></div>` : ""}
       ${t.error_message ? `<div class="alert">${escapeHtml(t.error_message)}</div>` : ""}
